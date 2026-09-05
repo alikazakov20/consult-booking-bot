@@ -6,4 +6,5 @@ public/
 .env.local
 server/prisma/dev.db
 server/prisma/dev.db-journal
+*.tsbuildinfo
 .DS_Store
