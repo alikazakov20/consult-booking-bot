@@ -61,13 +61,41 @@ npm start       # node server/dist/index.js — раздаёт и API, и ста
 Перед первым запуском на новом окружении не забудьте применить миграции:
 `npm run prisma:deploy --workspace server` (с настроенным `DATABASE_URL`).
 
-### Деплой
+### Деплой на Railway
 
-Подходит любой хостинг с постоянным процессом и HTTPS (Railway, Render, VPS + systemd).
-SQLite-файл (`DATABASE_URL=file:./prisma/dev.db`) достаточен для одного специалиста и невысокой
-нагрузки — важно только, чтобы диск был персистентным между рестартами (на Railway — volume).
-При росте нагрузки можно переключить `datasource` в `server/prisma/schema.prisma` на PostgreSQL
-без изменения остального кода.
+В репозитории уже лежит `railway.json` (build/start команды под этот монорепозиторий), поэтому нужно
+только подключить репозиторий и задать переменные окружения — без ручной настройки сборки.
+
+1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo** → выберите
+   `alikazakov20/consult-booking-bot`. Railway подхватит `railway.json` автоматически.
+2. **Обязательно добавьте Volume** (Settings вашего сервиса → Volumes → Add Volume), точка монтирования
+   `/data`. Без этого SQLite-файл будет затираться при каждом редеплое и вы потеряете все записи и ссылки.
+3. Задайте переменные окружения (Settings → Variables):
+   - `BOT_TOKEN` — токен от @BotFather
+   - `ADMIN_TELEGRAM_ID` — ваш numeric Telegram ID
+   - `DATABASE_URL` = `file:/data/dev.db` (абсолютный путь внутри смонтированного volume)
+   - `BOT_MODE` = `polling` (проще всего; `webhook` — см. ниже)
+   - `WEBHOOK_SECRET` — любая случайная строка (нужна только при `BOT_MODE=webhook`)
+   - `REMINDER_HOURS_BEFORE` = `3`
+   - `WEBAPP_URL` — временно любое значение-заглушку (`https://placeholder.example`), поправите на шаге 5
+4. Deploy. После первого успешного деплоя откройте Settings → Networking → **Generate Domain** —
+   Railway выдаст адрес вида `your-app.up.railway.app`.
+5. Обновите переменную `WEBAPP_URL` на `https://your-app.up.railway.app` (без `/` на конце) и сделайте
+   Redeploy — теперь кнопки в боте будут открывать правильный адрес Mini App.
+6. (Необязательно, но удобно) В @BotFather: `/mybots` → ваш бот → `Bot Settings` → `Menu Button` →
+   укажите тот же `WEBAPP_URL` — тогда кнопка Mini App всегда будет под рукой рядом с полем ввода.
+7. Напишите боту `/start` — как админу (`ADMIN_TELEGRAM_ID`) должна прийти кнопка «Открыть админку».
+   Зайдите в неё и настройте реальные рабочие часы (сиид ставит Пн-Пт 9:00–18:00 по умолчанию).
+
+Миграции применяются автоматически при каждом старте контейнера (`npm run start:prod` сначала
+выполняет `prisma migrate deploy`, затем запускает сервер) — отдельно накатывать их не нужно.
+Дефолтные рабочие часы и услугу «Консультация» разово прогоните командой `npm run prisma:seed --workspace server`
+через Railway Shell (или добавьте её в build-команду `railway.json`, если хотите, чтобы сиид запускался
+при каждом деплое — тогда сделайте её идемпотентной, как сейчас, через `upsert`, что уже так).
+
+Другие варианты хостинга (Render, VPS + systemd) подходят так же — важны только HTTPS и персистентный
+диск под `DATABASE_URL`. При росте нагрузки можно переключить `datasource` в `server/prisma/schema.prisma`
+на PostgreSQL без изменения остального кода.
 
 По умолчанию бот работает через long polling (`BOT_MODE=polling`) — не требует отдельной настройки
 webhook, но in-process (один инстанс). Для прод-нагрузки переключите `BOT_MODE=webhook` — сервер сам
