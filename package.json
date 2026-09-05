@@ -1,0 +1,17 @@
+{
+  "name": "consult-booking-bot",
+  "private": true,
+  "workspaces": [
+    "server",
+    "webapp"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace server",
+    "dev:webapp": "npm run dev --workspace webapp",
+    "build": "npm run build --workspace webapp && npm run build --workspace server",
+    "start": "npm run start --workspace server",
+    "prisma:generate": "npm run prisma:generate --workspace server",
+    "prisma:migrate": "npm run prisma:migrate --workspace server",
+    "prisma:seed": "npm run prisma:seed --workspace server"
+  }
+}
