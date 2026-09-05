@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { DateTime } from 'luxon';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { requireTelegramUser } from '../middleware/telegramAuth';
 import { formatMinutes, getFreeSlotsForDate, getSettings, todayInTz } from '../services/schedule';
@@ -102,7 +103,9 @@ bookingRouter.post('/confirm', requireTelegramUser, async (req, res) => {
 
   try {
     const booking = await prisma.$transaction(async (tx) => {
-      // Повторная проверка внутри транзакции — SQLite сериализует писателей, этого достаточно от гонки.
+      // Быстрая проверка для честного 409 без лишней записи; от гонки параллельных
+      // запросов на самом деле защищает частичный уникальный индекс в БД (см. миграцию) —
+      // он и превращается ниже в P2002, если два запроса проскочили эту проверку одновременно.
       const clash = await tx.booking.findFirst({ where: { date: dayJs, startMin, status: 'confirmed' } });
       if (clash) throw new Error('slot_unavailable');
 
@@ -159,7 +162,8 @@ bookingRouter.post('/confirm', requireTelegramUser, async (req, res) => {
       },
     });
   } catch (err) {
-    if (err instanceof Error && err.message === 'slot_unavailable') {
+    const isUniqueViolation = err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
+    if ((err instanceof Error && err.message === 'slot_unavailable') || isUniqueViolation) {
       res.status(409).json({ error: 'slot_unavailable' });
       return;
     }

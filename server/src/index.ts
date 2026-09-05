@@ -19,6 +19,8 @@ async function main() {
   app.use(cors());
   app.use(express.json());
 
+  app.get('/healthz', (_req, res) => res.status(200).send('ok'));
+
   app.use('/api/booking', bookingRouter);
   app.use('/api/admin', adminRouter);
 

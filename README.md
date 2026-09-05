@@ -9,7 +9,7 @@ Telegram-бот для записи на консультации (аналог 
 
 ```
 consult-booking-bot/
-├── server/     — Express API + Telegraf-бот + Prisma (SQLite)
+├── server/     — Express API + Telegraf-бот + Prisma (PostgreSQL)
 └── webapp/     — Telegram Mini App на React (booking-флоу + админка), Vite
 ```
 
@@ -21,8 +21,9 @@ consult-booking-bot/
 - Ссылки — одноразовые токены (`AccessLink`). После успешной брони токен помечается использованным.
   Выдаются вручную из админки или командой `/newlink` в чате с ботом — привяжите это к моменту оплаты
   консультации вручную (либо доработайте вебхук вашей платёжной системы, чтобы он дёргал `POST /api/admin/links`).
-- Двойного бронирования одного времени не бывает: слот проверяется повторно внутри транзакции
-  непосредственно перед созданием записи.
+- Двойного бронирования одного времени не бывает даже при одновременных запросах: помимо проверки
+  в транзакции это гарантирует частичный уникальный индекс в БД (см. миграцию) — проверено вживую
+  двумя параллельными запросами на один и тот же слот.
 - Напоминания клиенту отправляются автоматически за `REMINDER_HOURS_BEFORE` часов до консультации
   (фоновая задача, проверка раз в минуту).
 
@@ -31,17 +32,20 @@ consult-booking-bot/
 1. Создайте бота через [@BotFather](https://t.me/BotFather), получите `BOT_TOKEN`.
 2. Узнайте свой numeric Telegram ID через [@userinfobot](https://t.me/userinfobot) — это `ADMIN_TELEGRAM_ID`.
    Только этот пользователь получает доступ к админке.
-3. Скопируйте `server/.env.example` → `server/.env`, заполните значения.
+3. Заведите бесплатную PostgreSQL-базу на [neon.tech](https://neon.tech) (без карты, не истекает —
+   подробности в разделе «Деплой» ниже) или используйте свой Postgres локально. Скопируйте
+   connection string — это `DATABASE_URL`.
+4. Скопируйте `server/.env.example` → `server/.env`, заполните значения.
    `WEBAPP_URL` — публичный HTTPS-адрес деплоя (Telegram Mini App **требует** HTTPS;
    для локальной разработки прокиньте порт через `ngrok`/`cloudflared`).
-4. В @BotFather включите Mini App для бота: `/mybots` → выбрать бота → `Bot Settings` → `Menu Button` →
+5. В @BotFather включите Mini App для бота: `/mybots` → выбрать бота → `Bot Settings` → `Menu Button` →
    укажите `WEBAPP_URL` (необязательно, но удобно — тогда кнопка Mini App всегда под рукой).
 
 ### Установка и запуск (локально)
 
 ```bash
 npm install
-npm run prisma:migrate --workspace server   # создаёт SQLite-базу и таблицы
+npm run prisma:migrate --workspace server   # накатывает таблицы в вашу Postgres-базу (DATABASE_URL из server/.env)
 npm run prisma:seed --workspace server      # дефолтные рабочие часы (Пн-Пт 9:00-18:00) и услуга «Консультация»
 
 npm run dev:server   # API + бот, http://localhost:3000
@@ -61,45 +65,56 @@ npm start       # node server/dist/index.js — раздаёт и API, и ста
 Перед первым запуском на новом окружении не забудьте применить миграции:
 `npm run prisma:deploy --workspace server` (с настроенным `DATABASE_URL`).
 
-### Деплой на Railway
+### Деплой бесплатно: Render + Neon
 
-В репозитории уже лежит `railway.json` (build/start команды под этот монорепозиторий), поэтому нужно
-только подключить репозиторий и задать переменные окружения — без ручной настройки сборки.
+Компьютер и БД разнесены специально: Render (сам процесс) может засыпать/пересоздаваться — это не страшно,
+потому что данные живут отдельно, в Neon, и не теряются при перезапуске/редеплое.
 
-1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo** → выберите
-   `alikazakov20/consult-booking-bot`. Railway подхватит `railway.json` автоматически.
-2. **Обязательно добавьте Volume** (Settings вашего сервиса → Volumes → Add Volume), точка монтирования
-   `/data`. Без этого SQLite-файл будет затираться при каждом редеплое и вы потеряете все записи и ссылки.
-3. Задайте переменные окружения (Settings → Variables):
+**Шаг 1 — база данных (Neon, один раз)**
+
+1. [neon.tech](https://neon.tech) → зарегистрироваться (без карты) → **New Project**.
+2. На странице проекта скопируйте **Connection string** (вид
+   `postgresql://user:pass@ep-xxx.neon.tech/dbname?sslmode=require`) — это ваш `DATABASE_URL`.
+
+**Шаг 2 — сам бот (Render, тоже один раз)**
+
+В репозитории уже лежит `render.yaml` (Blueprint) — Render сам прочитает из него команды сборки/старта
+и список нужных переменных, вам останется только вписать значения.
+
+1. [render.com](https://render.com) → зарегистрироваться (без карты) → **New +** → **Blueprint**.
+2. Укажите репозиторий `alikazakov20/consult-booking-bot` → Render найдёт `render.yaml` и покажет
+   форму с переменными, которые нужно заполнить:
    - `BOT_TOKEN` — токен от @BotFather
    - `ADMIN_TELEGRAM_ID` — ваш numeric Telegram ID
-   - `DATABASE_URL` = `file:/data/dev.db` (абсолютный путь внутри смонтированного volume)
-   - `BOT_MODE` = `polling` (проще всего; `webhook` — см. ниже)
-   - `WEBHOOK_SECRET` — любая случайная строка (нужна только при `BOT_MODE=webhook`)
-   - `REMINDER_HOURS_BEFORE` = `3`
-   - `WEBAPP_URL` — временно любое значение-заглушку (`https://placeholder.example`), поправите на шаге 5
-4. Deploy. После первого успешного деплоя откройте Settings → Networking → **Generate Domain** —
-   Railway выдаст адрес вида `your-app.up.railway.app`.
-5. Обновите переменную `WEBAPP_URL` на `https://your-app.up.railway.app` (без `/` на конце) и сделайте
-   Redeploy — теперь кнопки в боте будут открывать правильный адрес Mini App.
-6. (Необязательно, но удобно) В @BotFather: `/mybots` → ваш бот → `Bot Settings` → `Menu Button` →
-   укажите тот же `WEBAPP_URL` — тогда кнопка Mini App всегда будет под рукой рядом с полем ввода.
-7. Напишите боту `/start` — как админу (`ADMIN_TELEGRAM_ID`) должна прийти кнопка «Открыть админку».
-   Зайдите в неё и настройте реальные рабочие часы (сиид ставит Пн-Пт 9:00–18:00 по умолчанию).
+   - `DATABASE_URL` — connection string из Neon (шаг 1)
+   - `WEBAPP_URL` — временно любое значение-заглушку (`https://placeholder.example`), поправите на шаге 4
+   (остальные переменные — `BOT_MODE`, `WEBHOOK_SECRET`, `REMINDER_HOURS_BEFORE` — уже заданы в `render.yaml`)
+3. **Apply** → Render соберёт и задеплоит сервис. Домен вида `consult-booking-bot-xxxx.onrender.com`
+   создаётся автоматически и виден на странице сервиса.
+4. Обновите переменную `WEBAPP_URL` на этот домен (`https://consult-booking-bot-xxxx.onrender.com`,
+   без `/` на конце) в Settings → Environment → **Save Changes** — Render передеплоит сам.
+5. (Необязательно, но удобно) В @BotFather: `/mybots` → ваш бот → `Bot Settings` → `Menu Button` →
+   укажите тот же `WEBAPP_URL`.
+6. Напишите боту `/start` — как админу (`ADMIN_TELEGRAM_ID`) должна прийти кнопка «Открыть админку».
+   Зайдите в неё и настройте реальные рабочие часы (сиид при первом старте ставит Пн-Пт 9:00–18:00).
 
-Миграции применяются автоматически при каждом старте контейнера (`npm run start:prod` сначала
-выполняет `prisma migrate deploy`, затем запускает сервер) — отдельно накатывать их не нужно.
-Дефолтные рабочие часы и услугу «Консультация» разово прогоните командой `npm run prisma:seed --workspace server`
-через Railway Shell (или добавьте её в build-команду `railway.json`, если хотите, чтобы сиид запускался
-при каждом деплое — тогда сделайте её идемпотентной, как сейчас, через `upsert`, что уже так).
+Миграции применяются автоматически при каждом старте (`npm run start:prod` сначала выполняет
+`prisma migrate deploy`, затем запускает сервер). Дефолтные рабочие часы и услугу «Консультация»
+разово прогоните командой `npm run prisma:seed --workspace server` через Render Shell (вкладка Shell
+на странице сервиса) — по одному разу, дальше это не нужно.
 
-Другие варианты хостинга (Render, VPS + systemd) подходят так же — важны только HTTPS и персистентный
-диск под `DATABASE_URL`. При росте нагрузки можно переключить `datasource` в `server/prisma/schema.prisma`
-на PostgreSQL без изменения остального кода.
+**Шаг 3 — чтобы бот не «засыпал» (один раз, тоже автоматизировано)**
 
-По умолчанию бот работает через long polling (`BOT_MODE=polling`) — не требует отдельной настройки
-webhook, но in-process (один инстанс). Для прод-нагрузки переключите `BOT_MODE=webhook` — сервер сам
-зарегистрирует webhook на `${WEBAPP_URL}/telegram/webhook/${WEBHOOK_SECRET}` при старте.
+Бесплатный план Render усыпляет сервис после 15 минут без запросов (следующий запрос будит его
+~минуту) — из-за этого может не сработать вовремя напоминание клиенту. В репозитории уже есть
+GitHub Actions воркфлоу `.github/workflows/keepalive.yml`, который пингует `/healthz` каждые 10 минут
+и не даёт сервису уснуть — просто добавьте переменную репозитория (не секрет, значение публично не
+чувствительное): GitHub → ваш репозиторий → **Settings → Secrets and variables → Actions → Variables**
+→ **New repository variable** → имя `RENDER_APP_URL`, значение — ваш домен с `https://` (без `/` на конце).
+После этого дальше ничего делать не нужно — воркфлоу сам запускается по расписанию.
+
+**BOT_MODE=webhook** (уже задан в `render.yaml`) означает, что Telegram сам стучится в бота по HTTP,
+а не бот опрашивает Telegram — это лучше сочетается с описанным выше сном/пробуждением, чем long polling.
 
 ## Что настраивается в админке
 
