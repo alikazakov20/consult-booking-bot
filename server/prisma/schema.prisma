@@ -3,94 +3,29 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
-// Единственная строка настроек расписания (singleton, id всегда 1)
-model ScheduleSettings {
-  id                 Int    @id @default(1)
-  slotMinutes        Int    @default(60)
-  bufferMinutes      Int    @default(0)
-  timezone           String @default("Europe/Moscow")
-  bookingHorizonDays Int    @default(30)
-}
-
-// Рабочие часы по дням недели (0 = воскресенье ... 6 = суббота), максимум одна запись на день
-model WorkingHours {
-  id       Int     @id @default(autoincrement())
-  weekday  Int     @unique
-  startMin Int
-  endMin   Int
-  isActive Boolean @default(true)
-}
-
-// Точечные исключения из обычного расписания: выходной день или изменённые часы на конкретную дату
-model DateException {
-  id       Int      @id @default(autoincrement())
-  date     DateTime @unique
-  isClosed Boolean  @default(true)
-  startMin Int?
-  endMin   Int?
-  note     String?
-}
-
-model ServiceType {
-  id          Int      @id @default(autoincrement())
-  name        String
-  durationMin Int
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-
-  accessLinks AccessLink[]
-  bookings    Booking[]
-}
-
-model Client {
-  id         Int      @id @default(autoincrement())
-  telegramId BigInt   @unique
-  firstName  String?
-  lastName   String?
-  username   String?
-  createdAt  DateTime @default(now())
-
-  bookings Booking[]
-}
-
-// active -> ссылкой ещё можно воспользоваться
-// used    -> по ссылке уже создана запись
-// revoked -> вручную отозвана администратором
-// expired проверяется динамически по expiresAt, отдельным статусом не хранится
+// active -> ссылкой ещё можно воспользоваться, used -> по ней уже создана запись
 model AccessLink {
-  id            Int          @id @default(autoincrement())
-  token         String       @unique
-  status        String       @default("active")
-  note          String?
-  serviceTypeId Int?
-  serviceType   ServiceType? @relation(fields: [serviceTypeId], references: [id])
-  expiresAt     DateTime?
-  createdAt     DateTime     @default(now())
-  usedAt        DateTime?
-  bookingId     Int?         @unique
-  booking       Booking?     @relation(fields: [bookingId], references: [id])
+  id        Int       @id @default(autoincrement())
+  token     String    @unique
+  status    String    @default("active")
+  createdAt DateTime  @default(now())
+  usedAt    DateTime?
 }
 
-// confirmed -> активная запись
-// cancelled -> отменена клиентом или администратором
+// Запись на консультацию. Длительность всегда фиксированная (см. server/src/schedule.ts),
+// поэтому endMin хранится просто для удобства отображения, а не для гибкой длительности.
 model Booking {
-  id             Int          @id @default(autoincrement())
-  clientId       Int
-  client         Client       @relation(fields: [clientId], references: [id])
-  serviceTypeId  Int?
-  serviceType    ServiceType? @relation(fields: [serviceTypeId], references: [id])
-  date           DateTime
-  startMin       Int
-  endMin         Int
-  status         String       @default("confirmed")
-  createdAt      DateTime     @default(now())
-  cancelledAt    DateTime?
-  reminderSentAt DateTime?
-  accessLink     AccessLink?
+  id           Int      @id @default(autoincrement())
+  telegramId   BigInt
+  telegramName String?
+  date         DateTime
+  startMin     Int
+  endMin       Int
+  createdAt    DateTime @default(now())
 
-  @@index([date, status])
+  @@unique([date, startMin])
 }
